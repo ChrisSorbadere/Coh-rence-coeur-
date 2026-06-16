@@ -199,11 +199,11 @@
       <div class="sect-h"><span class="t">Options</span></div>
       <div class="toggles" id="toggles">
         <div class="tg"><div><div class="lab">Sons doux</div><div class="sub">Note grave / aiguë à chaque transition</div></div><div class="sw" data-k="sound"></div></div>
-        <div class="tg"><div><div class="lab">Guidage sonore</div><div class="sub">Carillon en 432 Hz : monte à l'inspire, descend à l'expire</div></div><div class="sw" data-k="soundGuide"></div></div>
+        <div class="tg"><div><div class="lab">Guidage sonore</div><div class="sub">Son continu qui monte à l'inspire, redescend à l'expire</div></div><div class="sw" data-k="soundGuide"></div></div>
         <div class="voices" id="voices">
-          <button data-v="cristal">Cristal</button>
           <button data-v="bol">Bol tibétain</button>
-          <button data-v="carillon">Carillon</button>
+          <button data-v="onde">Onde chaude</button>
+          <button data-v="souffle">Souffle clair</button>
         </div>
         <div class="tg"><div><div class="lab">Vibration aux transitions</div><div class="sub">Pulsation courte à chaque phase</div></div><div class="sw" data-k="vibTransition"></div></div>
         <div class="tg"><div><div class="lab">Guidage vibrant</div><div class="sub">Pulsations rythmées pendant inspire / expire</div></div><div class="sw" data-k="vibGuide"></div></div>
@@ -307,7 +307,7 @@ const RHYTHMS=[
 const PH_LABEL={in:'Inspire', out:'Expire', hold:'Retiens', hold2:'Retiens'};
 
 /* ---------- état / réglages ---------- */
-const defaults={rhythm:'lent', minutes:5, sound:false, soundGuide:false, soundVoice:'cristal', vibTransition:false, vibGuide:false, vibEnd:true, wake:true, showWord:true,
+const defaults={rhythm:'lent', minutes:5, sound:false, soundGuide:false, soundVoice:'bol', vibTransition:false, vibGuide:false, vibEnd:true, wake:true, showWord:true,
   cIn:7,cH1:0,cOut:7,cH2:0};
 let S=Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS)||'{}'));
 const save=()=>localStorage.setItem(LS,JSON.stringify(S));
@@ -426,15 +426,16 @@ function startGuide(type, fromProg, fullMs){
   try{ navigator.vibrate(pat===null?0:pat); }catch(e){}
 }
 
-/* ---------- guidage sonore : carillon harmonieux (La = 432 Hz) ---------- */
-const SCALE=[432,513.74,576.65,647.27,769.74,864,1027.47];   // pentatonique majeure, A=432
+/* ---------- guidage sonore : nappe continue ondulante ---------- */
+// hauteur qui monte doucement à l'inspire et redescend à l'expire (amplitude faible, lissée)
 const VOICES={
-  cristal:  {oct:1,   partials:[[1,1],[2,0.30]],                       decay:1.9, peak:0.085, rev:[1.7,0.50], detune:0},
-  bol:      {oct:0.5, partials:[[1,1],[2,0.28],[2.76,0.12],[4,0.05]],  decay:3.0, peak:0.075, rev:[2.8,0.62], detune:3},
-  carillon: {oct:2,   partials:[[1,1],[1.5,0.22],[3,0.10]],            decay:2.3, peak:0.070, rev:[2.4,0.55], detune:0},
+  bol:     {base:[240,324], partials:[[1,1],[2,0.5],[2.76,0.13],[4,0.05]], lp:1500, gmin:0.016, gmax:0.046, rev:[2.6,0.34]},
+  onde:    {base:[192,256], partials:[[1,1],[2,0.40],[3,0.13]],            lp:950,  gmin:0.018, gmax:0.048, rev:[3.0,0.40]},
+  souffle: {base:[324,432], partials:[[1,1],[2,0.28],[4,0.07]],            lp:2300, gmin:0.012, gmax:0.038, rev:[2.2,0.30]},
 };
-function curVoice(){ return VOICES[S.soundVoice]||VOICES.cristal; }
-let gMaster=null, gRev=null, gLastIdx=-1;
+function curVoice(){ return VOICES[S.soundVoice]||VOICES.bol; }
+const smooth=x=>x*x*(3-2*x);
+let gMaster=null, gSwell=null, gFilt=null, gRev=null, gOscs=[];
 function ensureCtx(){ try{ actx=actx||new(window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended')actx.resume(); }catch(e){} return actx; }
 function makeReverb(sec){
   const len=Math.floor(actx.sampleRate*sec), buf=actx.createBuffer(2,len,actx.sampleRate);
@@ -442,43 +443,52 @@ function makeReverb(sec){
     for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,3.0); }
   const c=actx.createConvolver(); c.buffer=buf; return c;
 }
-function bell(master,rev,freq,when){          // note accordée selon l'ambiance choisie
-  const v=curVoice(), t=when||actx.currentTime, base=freq*v.oct, e=actx.createGain();
-  e.connect(master); if(rev) e.connect(rev);
-  e.gain.setValueAtTime(0.0001,t);
-  e.gain.linearRampToValueAtTime(v.peak,t+0.015);
-  e.gain.exponentialRampToValueAtTime(0.0001,t+v.decay);
-  v.partials.forEach(([ratio,g],k)=>{
-    const o=actx.createOscillator(), pg=actx.createGain();
-    o.type='sine'; o.frequency.value=base*ratio;
-    if(v.detune&&k===0) o.detune.value=v.detune;
-    pg.gain.value=g; o.connect(pg).connect(e); o.start(t); o.stop(t+v.decay+0.1);
-  });
-}
 function guideToneStart(){
   if(gMaster) return; if(!ensureCtx()) return;
-  gMaster=actx.createGain(); gMaster.gain.value=0.85; gMaster.connect(actx.destination);
-  const v=curVoice(); gRev=makeReverb(v.rev[0]); const rv=actx.createGain(); rv.gain.value=v.rev[1];
-  gRev.connect(rv).connect(gMaster); gLastIdx=-1;
+  const v=curVoice();
+  gMaster=actx.createGain(); gMaster.gain.value=0.9; gMaster.connect(actx.destination);
+  gFilt=actx.createBiquadFilter(); gFilt.type='lowpass'; gFilt.frequency.value=v.lp; gFilt.Q.value=0.2;
+  gSwell=actx.createGain(); gSwell.gain.value=0.0001;
+  gFilt.connect(gSwell).connect(gMaster);
+  gRev=makeReverb(v.rev[0]); const rv=actx.createGain(); rv.gain.value=v.rev[1];
+  gSwell.connect(gRev).connect(rv).connect(gMaster);
+  gOscs=v.partials.map(([ratio,g])=>{
+    const o=actx.createOscillator(), pg=actx.createGain();
+    o.type='sine'; o.frequency.value=v.base[0]*ratio; pg.gain.value=g;
+    o.connect(pg).connect(gFilt); o.start(); return {o,ratio};
+  });
 }
-function guideToneUpdate(level){
+function guideToneUpdate(level){             // level 0 (vide) -> 1 (plein)
   if(!gMaster||!actx||paused) return;
-  const i=Math.max(0,Math.min(SCALE.length-1, Math.round(level*(SCALE.length-1))));
-  if(i!==gLastIdx){ gLastIdx=i; bell(gMaster,gRev,SCALE[i]); }
+  const v=curVoice(), t=actx.currentTime, e=smooth(Math.max(0,Math.min(1,level)));
+  const base=lerp(v.base[0], v.base[1], e);
+  gOscs.forEach(({o,ratio})=> o.frequency.setTargetAtTime(base*ratio, t, 0.22));
+  gSwell.gain.setTargetAtTime(lerp(v.gmin, v.gmax, e), t, 0.2);
+  gFilt.frequency.setTargetAtTime(v.lp + e*350, t, 0.25);
 }
 function guideToneStop(){
   if(!gMaster) return;
-  try{ gMaster.gain.setTargetAtTime(0.0001,actx.currentTime,0.2); }catch(e){}
-  const m=gMaster; setTimeout(()=>{try{m.disconnect()}catch(e){}},1200);
-  gMaster=null; gRev=null; gLastIdx=-1;
+  try{ const t=actx.currentTime; gSwell.gain.setTargetAtTime(0.0001,t,0.25);
+       gOscs.forEach(({o})=>{try{o.stop(t+0.6)}catch(e){}}); }catch(e){}
+  const m=gMaster; setTimeout(()=>{try{m.disconnect()}catch(e){}},1000);
+  gMaster=null; gSwell=null; gFilt=null; gRev=null; gOscs=[];
 }
-function previewGuide(){
+function previewGuide(){                      // aperçu : une vague lente qui monte puis redescend
   if(!ensureCtx()) return;
-  const v=curVoice();
-  const m=actx.createGain(); m.gain.value=0.85; m.connect(actx.destination);
-  const rev=makeReverb(v.rev[0]), rv=actx.createGain(); rv.gain.value=v.rev[1]; rev.connect(rv).connect(m);
-  [0,2,3,4,3,2,0].forEach((s,k)=> bell(m,rev,SCALE[s], actx.currentTime + k*0.46));
-  setTimeout(()=>{try{m.disconnect()}catch(e){}},4500);
+  const v=curVoice(), t=actx.currentTime;
+  const master=actx.createGain(); master.gain.value=0.9; master.connect(actx.destination);
+  const fl=actx.createBiquadFilter(); fl.type='lowpass'; fl.frequency.value=v.lp; fl.Q.value=0.2;
+  const sw=actx.createGain(); sw.gain.value=0.0001; fl.connect(sw).connect(master);
+  const rev=makeReverb(v.rev[0]), rv=actx.createGain(); rv.gain.value=v.rev[1]; sw.connect(rev).connect(rv).connect(master);
+  const oscs=v.partials.map(([ratio,g])=>{ const o=actx.createOscillator(), pg=actx.createGain();
+    o.type='sine'; pg.gain.value=g; o.connect(pg).connect(fl); return {o,ratio}; });
+  const hi=v.base[1], lo=v.base[0];
+  oscs.forEach(({o,ratio})=>{ o.frequency.setValueAtTime(lo*ratio,t);
+    o.frequency.linearRampToValueAtTime(hi*ratio,t+1.8);
+    o.frequency.linearRampToValueAtTime(lo*ratio,t+3.6); o.start(t); o.stop(t+3.8); });
+  sw.gain.linearRampToValueAtTime(v.gmax,t+1.8);
+  sw.gain.linearRampToValueAtTime(0.0001,t+3.6);
+  setTimeout(()=>{try{master.disconnect()}catch(e){}},4200);
 }
 
 /* ---------- wake lock ---------- */
@@ -569,7 +579,7 @@ function setPause(v){
   if(v){ pauseStart=performance.now(); $('#pauseIcon').innerHTML='<path d="M8 5v14l11-7z"/>'; relWake(); vibrate(0);
     if(gMaster&&actx) gMaster.gain.setTargetAtTime(0.0001,actx.currentTime,0.08); }
   else { pausedMs+=performance.now()-pauseStart; $('#pauseIcon').innerHTML='<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>'; reqWake();
-    if(gMaster&&actx) gMaster.gain.setTargetAtTime(0.85,actx.currentTime,0.12);
+    if(gMaster&&actx) gMaster.gain.setTargetAtTime(0.9,actx.currentTime,0.12);
     const el=performance.now()-startTs-pausedMs; const {idx,into}=phaseAt(el); const p=phases[idx];
     startGuide(p.t, Math.min(1,into/p.d), p.d); }
 }
