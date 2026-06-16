@@ -80,10 +80,6 @@
   .durval small{font-size:15px;font-weight:500;color:var(--muted)}
 
   .toggles{display:flex;flex-direction:column;gap:2px;margin-top:4px}
-  .vibtest{margin-top:12px;width:100%;padding:12px;border-radius:13px;cursor:pointer;font-size:14px;font-weight:600;
-    color:var(--ink);background:var(--card);border:1px solid var(--line)}
-  .vibtest:active{transform:scale(.99)}
-  .vibmsg{font-size:12.5px;color:var(--muted);margin-top:9px;line-height:1.4;min-height:1px}
   .tg{display:flex;align-items:center;justify-content:space-between;padding:13px 2px;border-bottom:1px solid var(--line)}
   .tg:last-child{border-bottom:0}
   .tg .lab{font-size:14.5px}
@@ -197,14 +193,13 @@
       <div class="sect-h"><span class="t">Options</span></div>
       <div class="toggles" id="toggles">
         <div class="tg"><div><div class="lab">Sons doux</div><div class="sub">Note grave / aiguë à chaque transition</div></div><div class="sw" data-k="sound"></div></div>
+        <div class="tg"><div><div class="lab">Guidage sonore</div><div class="sub">Son continu : monte à l'inspire, descend à l'expire</div></div><div class="sw" data-k="soundGuide"></div></div>
         <div class="tg"><div><div class="lab">Vibration aux transitions</div><div class="sub">Pulsation courte à chaque phase</div></div><div class="sw" data-k="vibTransition"></div></div>
         <div class="tg"><div><div class="lab">Guidage vibrant</div><div class="sub">Pulsations rythmées pendant inspire / expire</div></div><div class="sw" data-k="vibGuide"></div></div>
         <div class="tg"><div><div class="lab">Vibration de fin</div><div class="sub">Signale la fin de la séance</div></div><div class="sw on" data-k="vibEnd"></div></div>
         <div class="tg"><div><div class="lab">Écran toujours allumé</div><div class="sub">Empêche la mise en veille</div></div><div class="sw on" data-k="wake"></div></div>
         <div class="tg"><div><div class="lab">Voix textuelle</div><div class="sub">Affiche Inspire / Expire au centre</div></div><div class="sw on" data-k="showWord"></div></div>
       </div>
-      <button class="vibtest" id="vibTest">Tester la vibration</button>
-      <div class="vibmsg" id="vibMsg"></div>
     </div>
 
     <button class="start" id="startBtn">Commencer</button>
@@ -301,7 +296,7 @@ const RHYTHMS=[
 const PH_LABEL={in:'Inspire', out:'Expire', hold:'Retiens', hold2:'Retiens'};
 
 /* ---------- état / réglages ---------- */
-const defaults={rhythm:'lent', minutes:5, sound:false, vibTransition:false, vibGuide:false, vibEnd:true, wake:true, showWord:true,
+const defaults={rhythm:'lent', minutes:5, sound:false, soundGuide:false, vibTransition:false, vibGuide:false, vibEnd:true, wake:true, showWord:true,
   cIn:7,cH1:0,cOut:7,cH2:0};
 let S=Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS)||'{}'));
 const save=()=>localStorage.setItem(LS,JSON.stringify(S));
@@ -320,25 +315,16 @@ RHYTHMS.forEach(r=>{
 });
 $('#custom').classList.toggle('show', S.rhythm==='custom');
 
-['sound','vibTransition','vibGuide','vibEnd','wake','showWord'].forEach(k=>{
+['sound','soundGuide','vibTransition','vibGuide','vibEnd','wake','showWord'].forEach(k=>{
   const sw=document.querySelector(`.sw[data-k="${k}"]`); sw.classList.toggle('on',!!S[k]);
   sw.onclick=()=>{ S[k]=!S[k]; sw.classList.toggle('on',S[k]); save();
     if(S[k] && k.startsWith('vib')){
       if(navigator.vibrate){ try{navigator.vibrate(140)}catch(e){} }
       else { sw.classList.remove('on'); S[k]=false; save(); alert("Ce navigateur ne gère pas la vibration (c'est le cas sur iPhone/Safari). Sur Android, utilise Chrome et vérifie que la vibration système est activée."); }
     }
+    if(S[k] && k==='soundGuide') previewGuide();
   };
 });
-
-$('#vibTest').onclick=()=>{
-  const el=$('#vibMsg');
-  if(!('vibrate'in navigator)){ el.textContent="❌ La vibration n'est pas supportée par ce navigateur (cas d'iOS/Safari)."; return; }
-  try{ navigator.vibrate(0); }catch(e){}
-  let ok=false; try{ ok=navigator.vibrate([130,80,170,80,230]); }catch(e){}
-  el.textContent = ok===false
-    ? "⚠️ Le navigateur a refusé la commande. Touche d'abord l'écran, puis réessaie."
-    : "✅ Commande envoyée. Si tu n'as rien senti : la vibration web est coupée par Android. Sur Realme/ColorOS → Paramètres › Sons et vibrations › active « Vibration au toucher / Retour haptique », et désactive l'économie d'énergie pour Chrome.";
-};
 
 const dur=$('#dur'); dur.value=S.minutes; $('#durV').textContent=S.minutes;
 dur.oninput=()=>{ S.minutes=+dur.value; $('#durV').textContent=dur.value; save(); updateHint(); };
@@ -419,6 +405,42 @@ function startGuide(type, fromProg, fullMs){
   try{ navigator.vibrate(pat===null?0:pat); }catch(e){}
 }
 
+/* ---------- guidage sonore (drone modulé) ---------- */
+let gOsc=null, gGain=null, gFilt=null;
+function ensureCtx(){ try{ actx=actx||new(window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended')actx.resume(); }catch(e){} return actx; }
+function guideToneStart(){
+  if(gOsc) return; if(!ensureCtx()) return;
+  gOsc=actx.createOscillator(); gGain=actx.createGain(); gFilt=actx.createBiquadFilter();
+  gOsc.type='sine'; gFilt.type='lowpass'; gFilt.frequency.value=900;
+  gGain.gain.value=0.0001;
+  gOsc.connect(gFilt).connect(gGain).connect(actx.destination);
+  gOsc.frequency.value=180; gOsc.start();
+}
+function guideToneUpdate(level){      // level 0 (vide) -> 1 (plein)
+  if(!gOsc||!actx) return;
+  const t=actx.currentTime;
+  const f=lerp(174,330,level);                 // hauteur : monte à l'inspire
+  const g=paused?0.0001:lerp(0.012,0.09,level); // volume : plus plein en haut, doux en bas
+  gOsc.frequency.setTargetAtTime(f,t,0.05);
+  gGain.gain.setTargetAtTime(g,t,0.06);
+}
+function guideToneStop(){
+  if(!gOsc) return;
+  try{ const t=actx.currentTime; gGain.gain.setTargetAtTime(0.0001,t,0.08); gOsc.stop(t+0.3); }catch(e){}
+  gOsc=null; gGain=null; gFilt=null;
+}
+function previewGuide(){              // petit aperçu montée/descente à l'activation
+  if(!ensureCtx()) return;
+  const t=actx.currentTime, o=actx.createOscillator(), g=actx.createGain(), fl=actx.createBiquadFilter();
+  o.type='sine'; fl.type='lowpass'; fl.frequency.value=900;
+  o.connect(fl).connect(g).connect(actx.destination);
+  g.gain.setValueAtTime(0.0001,t); g.gain.linearRampToValueAtTime(0.08,t+0.1);
+  o.frequency.setValueAtTime(174,t); o.frequency.linearRampToValueAtTime(330,t+0.9);
+  o.frequency.linearRampToValueAtTime(174,t+1.8);
+  g.gain.setValueAtTime(0.08,t+1.6); g.gain.exponentialRampToValueAtTime(0.0001,t+1.95);
+  o.start(t); o.stop(t+2);
+}
+
 /* ---------- wake lock ---------- */
 let wl=null;
 async function reqWake(){ if(!S.wake||!('wakeLock'in navigator))return; try{wl=await navigator.wakeLock.request('screen')}catch(e){} }
@@ -456,7 +478,8 @@ function startSession(){
   totalMs=S.minutes*60*1000; startTs=performance.now(); pausedMs=0;
   curPhase=-1; breaths=0; running=true; paused=false;
   show('play'); reqWake();
-  if(S.sound){ try{actx=actx||new(window.AudioContext||window.webkitAudioContext)();actx.resume()}catch(e){} }
+  if(S.sound||S.soundGuide){ ensureCtx(); }
+  if(S.soundGuide) guideToneStart();
   setSoundIcon();
   loop();
 }
@@ -496,18 +519,20 @@ function loop(){
   glow.style.opacity = 0.45+0.45*level;
   axisBall.style.left=(level*100)+'%';
   axisFill.style.width=(level*100)+'%';
+  if(S.soundGuide) guideToneUpdate(level);
 
   raf=requestAnimationFrame(loop);
 }
 
 function setPause(v){
   paused=v;
-  if(v){ pauseStart=performance.now(); $('#pauseIcon').innerHTML='<path d="M8 5v14l11-7z"/>'; relWake(); vibrate(0); }
+  if(v){ pauseStart=performance.now(); $('#pauseIcon').innerHTML='<path d="M8 5v14l11-7z"/>'; relWake(); vibrate(0);
+    if(gGain&&actx) gGain.gain.setTargetAtTime(0.0001,actx.currentTime,0.06); }
   else { pausedMs+=performance.now()-pauseStart; $('#pauseIcon').innerHTML='<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>'; reqWake();
     const el=performance.now()-startTs-pausedMs; const {idx,into}=phaseAt(el); const p=phases[idx];
     startGuide(p.t, Math.min(1,into/p.d), p.d); }
 }
-function stopEngine(){ running=false; cancelAnimationFrame(raf); relWake(); vibrate(0); }
+function stopEngine(){ running=false; cancelAnimationFrame(raf); relWake(); vibrate(0); guideToneStop(); }
 
 function finish(){
   stopEngine();
