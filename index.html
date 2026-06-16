@@ -80,6 +80,10 @@
   .durval small{font-size:15px;font-weight:500;color:var(--muted)}
 
   .toggles{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+  .vibtest{margin-top:12px;width:100%;padding:12px;border-radius:13px;cursor:pointer;font-size:14px;font-weight:600;
+    color:var(--ink);background:var(--card);border:1px solid var(--line)}
+  .vibtest:active{transform:scale(.99)}
+  .vibmsg{font-size:12.5px;color:var(--muted);margin-top:9px;line-height:1.4;min-height:1px}
   .tg{display:flex;align-items:center;justify-content:space-between;padding:13px 2px;border-bottom:1px solid var(--line)}
   .tg:last-child{border-bottom:0}
   .tg .lab{font-size:14.5px}
@@ -199,6 +203,8 @@
         <div class="tg"><div><div class="lab">Écran toujours allumé</div><div class="sub">Empêche la mise en veille</div></div><div class="sw on" data-k="wake"></div></div>
         <div class="tg"><div><div class="lab">Voix textuelle</div><div class="sub">Affiche Inspire / Expire au centre</div></div><div class="sw on" data-k="showWord"></div></div>
       </div>
+      <button class="vibtest" id="vibTest">Tester la vibration</button>
+      <div class="vibmsg" id="vibMsg"></div>
     </div>
 
     <button class="start" id="startBtn">Commencer</button>
@@ -323,6 +329,16 @@ $('#custom').classList.toggle('show', S.rhythm==='custom');
     }
   };
 });
+
+$('#vibTest').onclick=()=>{
+  const el=$('#vibMsg');
+  if(!('vibrate'in navigator)){ el.textContent="❌ La vibration n'est pas supportée par ce navigateur (cas d'iOS/Safari)."; return; }
+  try{ navigator.vibrate(0); }catch(e){}
+  let ok=false; try{ ok=navigator.vibrate([130,80,170,80,230]); }catch(e){}
+  el.textContent = ok===false
+    ? "⚠️ Le navigateur a refusé la commande. Touche d'abord l'écran, puis réessaie."
+    : "✅ Commande envoyée. Si tu n'as rien senti : la vibration web est coupée par Android. Sur Realme/ColorOS → Paramètres › Sons et vibrations › active « Vibration au toucher / Retour haptique », et désactive l'économie d'énergie pour Chrome.";
+};
 
 const dur=$('#dur'); dur.value=S.minutes; $('#durV').textContent=S.minutes;
 dur.oninput=()=>{ S.minutes=+dur.value; $('#durV').textContent=dur.value; save(); updateHint(); };
