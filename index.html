@@ -534,7 +534,25 @@ $('#fsBtn').onclick=()=>{ const d=document.documentElement;
   else { (document.exitFullscreen||document.webkitExitFullscreen||(()=>{})).call(document); } };
 
 /* ---------- PWA ---------- */
-if('serviceWorker'in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{})); }
+if('serviceWorker'in navigator){
+  window.addEventListener('load',()=>{
+    const hadController=!!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').then(reg=>{
+      reg.update();
+      setInterval(()=>reg.update(), 60*60*1000);
+      reg.addEventListener('updatefound',()=>{
+        const nw=reg.installing;
+        nw&&nw.addEventListener('statechange',()=>{
+          if(nw.state==='installed'&&navigator.serviceWorker.controller) nw.postMessage&&reg.waiting&&reg.waiting.postMessage('skipWaiting');
+        });
+      });
+    }).catch(()=>{});
+    let reloaded=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      if(hadController&&!reloaded){ reloaded=true; location.reload(); }
+    });
+  });
+}
 </script>
 </body>
 </html>
