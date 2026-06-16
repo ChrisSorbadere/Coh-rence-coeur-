@@ -80,6 +80,12 @@
   .durval small{font-size:15px;font-weight:500;color:var(--muted)}
 
   .toggles{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+  .voices{display:none;gap:8px;padding:6px 0 10px}
+  .voices.show{display:flex}
+  .voices button{flex:1;padding:10px 4px;border-radius:12px;cursor:pointer;font-size:13px;font-weight:600;
+    color:var(--muted);background:var(--card);border:1px solid var(--line);transition:.18s}
+  .voices button.sel{color:var(--ink);border-color:transparent;
+    box-shadow:inset 0 0 0 1.5px rgba(94,234,212,.6)}
   .tg{display:flex;align-items:center;justify-content:space-between;padding:13px 2px;border-bottom:1px solid var(--line)}
   .tg:last-child{border-bottom:0}
   .tg .lab{font-size:14.5px}
@@ -193,7 +199,12 @@
       <div class="sect-h"><span class="t">Options</span></div>
       <div class="toggles" id="toggles">
         <div class="tg"><div><div class="lab">Sons doux</div><div class="sub">Note grave / aiguë à chaque transition</div></div><div class="sw" data-k="sound"></div></div>
-        <div class="tg"><div><div class="lab">Guidage sonore</div><div class="sub">Son continu : monte à l'inspire, descend à l'expire</div></div><div class="sw" data-k="soundGuide"></div></div>
+        <div class="tg"><div><div class="lab">Guidage sonore</div><div class="sub">Carillon en 432 Hz : monte à l'inspire, descend à l'expire</div></div><div class="sw" data-k="soundGuide"></div></div>
+        <div class="voices" id="voices">
+          <button data-v="cristal">Cristal</button>
+          <button data-v="bol">Bol tibétain</button>
+          <button data-v="carillon">Carillon</button>
+        </div>
         <div class="tg"><div><div class="lab">Vibration aux transitions</div><div class="sub">Pulsation courte à chaque phase</div></div><div class="sw" data-k="vibTransition"></div></div>
         <div class="tg"><div><div class="lab">Guidage vibrant</div><div class="sub">Pulsations rythmées pendant inspire / expire</div></div><div class="sw" data-k="vibGuide"></div></div>
         <div class="tg"><div><div class="lab">Vibration de fin</div><div class="sub">Signale la fin de la séance</div></div><div class="sw on" data-k="vibEnd"></div></div>
@@ -296,7 +307,7 @@ const RHYTHMS=[
 const PH_LABEL={in:'Inspire', out:'Expire', hold:'Retiens', hold2:'Retiens'};
 
 /* ---------- état / réglages ---------- */
-const defaults={rhythm:'lent', minutes:5, sound:false, soundGuide:false, vibTransition:false, vibGuide:false, vibEnd:true, wake:true, showWord:true,
+const defaults={rhythm:'lent', minutes:5, sound:false, soundGuide:false, soundVoice:'cristal', vibTransition:false, vibGuide:false, vibEnd:true, wake:true, showWord:true,
   cIn:7,cH1:0,cOut:7,cH2:0};
 let S=Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS)||'{}'));
 const save=()=>localStorage.setItem(LS,JSON.stringify(S));
@@ -323,8 +334,18 @@ $('#custom').classList.toggle('show', S.rhythm==='custom');
       else { sw.classList.remove('on'); S[k]=false; save(); alert("Ce navigateur ne gère pas la vibration (c'est le cas sur iPhone/Safari). Sur Android, utilise Chrome et vérifie que la vibration système est activée."); }
     }
     if(S[k] && k==='soundGuide') previewGuide();
+    if(k==='soundGuide') updateVoicesVis();
   };
 });
+const voicesEl=$('#voices');
+function updateVoicesVis(){ voicesEl.classList.toggle('show', !!S.soundGuide); }
+voicesEl.querySelectorAll('button').forEach(b=>{
+  b.classList.toggle('sel', b.dataset.v===S.soundVoice);
+  b.onclick=()=>{ S.soundVoice=b.dataset.v; save();
+    voicesEl.querySelectorAll('button').forEach(x=>x.classList.toggle('sel',x.dataset.v===S.soundVoice));
+    previewGuide(); };
+});
+updateVoicesVis();
 
 const dur=$('#dur'); dur.value=S.minutes; $('#durV').textContent=S.minutes;
 dur.oninput=()=>{ S.minutes=+dur.value; $('#durV').textContent=dur.value; save(); updateHint(); };
@@ -405,46 +426,59 @@ function startGuide(type, fromProg, fullMs){
   try{ navigator.vibrate(pat===null?0:pat); }catch(e){}
 }
 
-/* ---------- guidage sonore : nappe grave méditative ---------- */
-let gOscA=null, gOscB=null, gGain=null, gFilt=null;
+/* ---------- guidage sonore : carillon harmonieux (La = 432 Hz) ---------- */
+const SCALE=[432,513.74,576.65,647.27,769.74,864,1027.47];   // pentatonique majeure, A=432
+const VOICES={
+  cristal:  {oct:1,   partials:[[1,1],[2,0.30]],                       decay:1.9, peak:0.085, rev:[1.7,0.50], detune:0},
+  bol:      {oct:0.5, partials:[[1,1],[2,0.28],[2.76,0.12],[4,0.05]],  decay:3.0, peak:0.075, rev:[2.8,0.62], detune:3},
+  carillon: {oct:2,   partials:[[1,1],[1.5,0.22],[3,0.10]],            decay:2.3, peak:0.070, rev:[2.4,0.55], detune:0},
+};
+function curVoice(){ return VOICES[S.soundVoice]||VOICES.cristal; }
+let gMaster=null, gRev=null, gLastIdx=-1;
 function ensureCtx(){ try{ actx=actx||new(window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended')actx.resume(); }catch(e){} return actx; }
-function guideToneStart(){
-  if(gOscA) return; if(!ensureCtx()) return;
-  gOscA=actx.createOscillator(); gOscB=actx.createOscillator();
-  gGain=actx.createGain(); gFilt=actx.createBiquadFilter();
-  gOscA.type='sine'; gOscB.type='sine';
-  gFilt.type='lowpass'; gFilt.frequency.value=520; gFilt.Q.value=0.3;  // adoucit, retire toute dureté
-  gOscB.detune.value=7;                                                // léger battement chaleureux
-  gGain.gain.value=0.0001;
-  gOscA.connect(gFilt); gOscB.connect(gFilt); gFilt.connect(gGain).connect(actx.destination);
-  gOscA.frequency.value=120; gOscB.frequency.value=120;
-  gOscA.start(); gOscB.start();
+function makeReverb(sec){
+  const len=Math.floor(actx.sampleRate*sec), buf=actx.createBuffer(2,len,actx.sampleRate);
+  for(let ch=0;ch<2;ch++){ const d=buf.getChannelData(ch);
+    for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,3.0); }
+  const c=actx.createConvolver(); c.buffer=buf; return c;
 }
-function guideToneUpdate(level){      // level 0 (vide) -> 1 (plein)
-  if(!gOscA||!actx) return;
-  const t=actx.currentTime;
-  const f=lerp(118,150,level);                       // hauteur grave, mouvement minime
-  const g=paused?0.0001:lerp(0.003,0.038,level*level); // volume très doux qui enfle/retombe
-  gOscA.frequency.setTargetAtTime(f,t,0.2);
-  gOscB.frequency.setTargetAtTime(f,t,0.2);
-  gGain.gain.setTargetAtTime(g,t,0.18);
+function bell(master,rev,freq,when){          // note accordée selon l'ambiance choisie
+  const v=curVoice(), t=when||actx.currentTime, base=freq*v.oct, e=actx.createGain();
+  e.connect(master); if(rev) e.connect(rev);
+  e.gain.setValueAtTime(0.0001,t);
+  e.gain.linearRampToValueAtTime(v.peak,t+0.015);
+  e.gain.exponentialRampToValueAtTime(0.0001,t+v.decay);
+  v.partials.forEach(([ratio,g],k)=>{
+    const o=actx.createOscillator(), pg=actx.createGain();
+    o.type='sine'; o.frequency.value=base*ratio;
+    if(v.detune&&k===0) o.detune.value=v.detune;
+    pg.gain.value=g; o.connect(pg).connect(e); o.start(t); o.stop(t+v.decay+0.1);
+  });
+}
+function guideToneStart(){
+  if(gMaster) return; if(!ensureCtx()) return;
+  gMaster=actx.createGain(); gMaster.gain.value=0.85; gMaster.connect(actx.destination);
+  const v=curVoice(); gRev=makeReverb(v.rev[0]); const rv=actx.createGain(); rv.gain.value=v.rev[1];
+  gRev.connect(rv).connect(gMaster); gLastIdx=-1;
+}
+function guideToneUpdate(level){
+  if(!gMaster||!actx||paused) return;
+  const i=Math.max(0,Math.min(SCALE.length-1, Math.round(level*(SCALE.length-1))));
+  if(i!==gLastIdx){ gLastIdx=i; bell(gMaster,gRev,SCALE[i]); }
 }
 function guideToneStop(){
-  if(!gOscA) return;
-  try{ const t=actx.currentTime; gGain.gain.setTargetAtTime(0.0001,t,0.25); gOscA.stop(t+0.6); gOscB.stop(t+0.6); }catch(e){}
-  gOscA=null; gOscB=null; gGain=null; gFilt=null;
+  if(!gMaster) return;
+  try{ gMaster.gain.setTargetAtTime(0.0001,actx.currentTime,0.2); }catch(e){}
+  const m=gMaster; setTimeout(()=>{try{m.disconnect()}catch(e){}},1200);
+  gMaster=null; gRev=null; gLastIdx=-1;
 }
-function previewGuide(){              // aperçu doux : une lente respiration sonore
+function previewGuide(){
   if(!ensureCtx()) return;
-  const t=actx.currentTime, a=actx.createOscillator(), b=actx.createOscillator(),
-        g=actx.createGain(), fl=actx.createBiquadFilter();
-  a.type='sine'; b.type='sine'; b.detune.value=7; fl.type='lowpass'; fl.frequency.value=520;
-  a.connect(fl); b.connect(fl); fl.connect(g).connect(actx.destination);
-  a.frequency.value=120; b.frequency.value=120;
-  g.gain.setValueAtTime(0.0001,t);
-  g.gain.linearRampToValueAtTime(0.038,t+1.4);       // inspire
-  g.gain.linearRampToValueAtTime(0.0001,t+3.0);       // expire
-  a.start(t); b.start(t); a.stop(t+3.1); b.stop(t+3.1);
+  const v=curVoice();
+  const m=actx.createGain(); m.gain.value=0.85; m.connect(actx.destination);
+  const rev=makeReverb(v.rev[0]), rv=actx.createGain(); rv.gain.value=v.rev[1]; rev.connect(rv).connect(m);
+  [0,2,3,4,3,2,0].forEach((s,k)=> bell(m,rev,SCALE[s], actx.currentTime + k*0.46));
+  setTimeout(()=>{try{m.disconnect()}catch(e){}},4500);
 }
 
 /* ---------- wake lock ---------- */
@@ -533,8 +567,9 @@ function loop(){
 function setPause(v){
   paused=v;
   if(v){ pauseStart=performance.now(); $('#pauseIcon').innerHTML='<path d="M8 5v14l11-7z"/>'; relWake(); vibrate(0);
-    if(gGain&&actx) gGain.gain.setTargetAtTime(0.0001,actx.currentTime,0.06); }
+    if(gMaster&&actx) gMaster.gain.setTargetAtTime(0.0001,actx.currentTime,0.08); }
   else { pausedMs+=performance.now()-pauseStart; $('#pauseIcon').innerHTML='<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>'; reqWake();
+    if(gMaster&&actx) gMaster.gain.setTargetAtTime(0.85,actx.currentTime,0.12);
     const el=performance.now()-startTs-pausedMs; const {idx,into}=phaseAt(el); const p=phases[idx];
     startGuide(p.t, Math.min(1,into/p.d), p.d); }
 }
