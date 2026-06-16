@@ -405,40 +405,46 @@ function startGuide(type, fromProg, fullMs){
   try{ navigator.vibrate(pat===null?0:pat); }catch(e){}
 }
 
-/* ---------- guidage sonore (drone modulé) ---------- */
-let gOsc=null, gGain=null, gFilt=null;
+/* ---------- guidage sonore : nappe grave méditative ---------- */
+let gOscA=null, gOscB=null, gGain=null, gFilt=null;
 function ensureCtx(){ try{ actx=actx||new(window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended')actx.resume(); }catch(e){} return actx; }
 function guideToneStart(){
-  if(gOsc) return; if(!ensureCtx()) return;
-  gOsc=actx.createOscillator(); gGain=actx.createGain(); gFilt=actx.createBiquadFilter();
-  gOsc.type='sine'; gFilt.type='lowpass'; gFilt.frequency.value=900;
+  if(gOscA) return; if(!ensureCtx()) return;
+  gOscA=actx.createOscillator(); gOscB=actx.createOscillator();
+  gGain=actx.createGain(); gFilt=actx.createBiquadFilter();
+  gOscA.type='sine'; gOscB.type='sine';
+  gFilt.type='lowpass'; gFilt.frequency.value=520; gFilt.Q.value=0.3;  // adoucit, retire toute dureté
+  gOscB.detune.value=7;                                                // léger battement chaleureux
   gGain.gain.value=0.0001;
-  gOsc.connect(gFilt).connect(gGain).connect(actx.destination);
-  gOsc.frequency.value=180; gOsc.start();
+  gOscA.connect(gFilt); gOscB.connect(gFilt); gFilt.connect(gGain).connect(actx.destination);
+  gOscA.frequency.value=120; gOscB.frequency.value=120;
+  gOscA.start(); gOscB.start();
 }
 function guideToneUpdate(level){      // level 0 (vide) -> 1 (plein)
-  if(!gOsc||!actx) return;
+  if(!gOscA||!actx) return;
   const t=actx.currentTime;
-  const f=lerp(174,330,level);                 // hauteur : monte à l'inspire
-  const g=paused?0.0001:lerp(0.012,0.09,level); // volume : plus plein en haut, doux en bas
-  gOsc.frequency.setTargetAtTime(f,t,0.05);
-  gGain.gain.setTargetAtTime(g,t,0.06);
+  const f=lerp(118,150,level);                       // hauteur grave, mouvement minime
+  const g=paused?0.0001:lerp(0.003,0.038,level*level); // volume très doux qui enfle/retombe
+  gOscA.frequency.setTargetAtTime(f,t,0.2);
+  gOscB.frequency.setTargetAtTime(f,t,0.2);
+  gGain.gain.setTargetAtTime(g,t,0.18);
 }
 function guideToneStop(){
-  if(!gOsc) return;
-  try{ const t=actx.currentTime; gGain.gain.setTargetAtTime(0.0001,t,0.08); gOsc.stop(t+0.3); }catch(e){}
-  gOsc=null; gGain=null; gFilt=null;
+  if(!gOscA) return;
+  try{ const t=actx.currentTime; gGain.gain.setTargetAtTime(0.0001,t,0.25); gOscA.stop(t+0.6); gOscB.stop(t+0.6); }catch(e){}
+  gOscA=null; gOscB=null; gGain=null; gFilt=null;
 }
-function previewGuide(){              // petit aperçu montée/descente à l'activation
+function previewGuide(){              // aperçu doux : une lente respiration sonore
   if(!ensureCtx()) return;
-  const t=actx.currentTime, o=actx.createOscillator(), g=actx.createGain(), fl=actx.createBiquadFilter();
-  o.type='sine'; fl.type='lowpass'; fl.frequency.value=900;
-  o.connect(fl).connect(g).connect(actx.destination);
-  g.gain.setValueAtTime(0.0001,t); g.gain.linearRampToValueAtTime(0.08,t+0.1);
-  o.frequency.setValueAtTime(174,t); o.frequency.linearRampToValueAtTime(330,t+0.9);
-  o.frequency.linearRampToValueAtTime(174,t+1.8);
-  g.gain.setValueAtTime(0.08,t+1.6); g.gain.exponentialRampToValueAtTime(0.0001,t+1.95);
-  o.start(t); o.stop(t+2);
+  const t=actx.currentTime, a=actx.createOscillator(), b=actx.createOscillator(),
+        g=actx.createGain(), fl=actx.createBiquadFilter();
+  a.type='sine'; b.type='sine'; b.detune.value=7; fl.type='lowpass'; fl.frequency.value=520;
+  a.connect(fl); b.connect(fl); fl.connect(g).connect(actx.destination);
+  a.frequency.value=120; b.frequency.value=120;
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.linearRampToValueAtTime(0.038,t+1.4);       // inspire
+  g.gain.linearRampToValueAtTime(0.0001,t+3.0);       // expire
+  a.start(t); b.start(t); a.stop(t+3.1); b.stop(t+3.1);
 }
 
 /* ---------- wake lock ---------- */
