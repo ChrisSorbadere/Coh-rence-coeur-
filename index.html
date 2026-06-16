@@ -482,13 +482,15 @@ function guideToneStop(){
   const m=gMaster; setTimeout(()=>{try{m.disconnect()}catch(e){}},1000);
   gMaster=null; gFilt=null; gSwell=null; gSrc=null;
 }
-function previewGuide(){                    // aperçu : une vague lente qui monte puis se retire
+function previewGuide(){                    // aperçu : deux vagues (inspir puis expir)
   if(!ensureCtx()) return;
   const v=curVoice(), t=actx.currentTime, c=buildChain(v);
-  c.filt.frequency.setValueAtTime(v.f[0],t); c.filt.frequency.linearRampToValueAtTime(v.f[1],t+2.0);
-  c.filt.frequency.linearRampToValueAtTime(v.f[0],t+4.0);
-  c.swell.gain.setValueAtTime(v.g[0],t); c.swell.gain.linearRampToValueAtTime(v.g[1],t+2.0);
-  c.swell.gain.linearRampToValueAtTime(0.0001,t+4.0);
+  const F=c.filt.frequency, G=c.swell.gain;
+  F.setValueAtTime(v.f[0],t); G.setValueAtTime(v.g[0],t);
+  [1,2,3,4].forEach((n,i)=>{ const up=(i%2===0);            // 1s montée, 1s descente, ×2
+    F.linearRampToValueAtTime(up?v.f[1]:v.f[0], t+n);
+    G.linearRampToValueAtTime(up?v.g[1]:(n===4?0.0001:v.g[0]), t+n);
+  });
   try{ c.src.stop(t+4.2); }catch(e){}
   setTimeout(()=>{try{c.master.disconnect()}catch(e){}},4600);
 }
@@ -571,7 +573,10 @@ function loop(){
   glow.style.opacity = 0.45+0.45*level;
   axisBall.style.left=(level*100)+'%';
   axisFill.style.width=(level*100)+'%';
-  if(S.soundGuide) guideToneUpdate(level);
+  if(S.soundGuide){
+    const sg=(p.t==='in'||p.t==='out')?Math.sin(prog*Math.PI):0;  // une vague par phase
+    guideToneUpdate(sg);
+  }
 
   raf=requestAnimationFrame(loop);
 }
