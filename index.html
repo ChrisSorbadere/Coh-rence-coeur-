@@ -124,7 +124,16 @@
   .cue .ph{font-size:23px;font-weight:680;letter-spacing:-.01em}
   .cue .ct{font-size:46px;font-weight:680;font-variant-numeric:tabular-nums;line-height:1.05;letter-spacing:-.03em}
 
-  .controls{display:flex;gap:18px;align-items:center;margin-top:46px}
+  .axis{width:min(74vw,300px);margin-top:34px;display:flex;flex-direction:column;gap:9px}
+  .axis .track{position:relative;height:5px;border-radius:99px;background:rgba(255,255,255,.13)}
+  .axis .fill{position:absolute;left:0;top:0;height:100%;width:0;border-radius:99px;
+    background:linear-gradient(90deg,var(--teal),var(--sky))}
+  .axis .ball{position:absolute;top:50%;left:0;width:20px;height:20px;border-radius:50%;
+    transform:translate(-50%,-50%);background:radial-gradient(circle at 36% 32%,#fff,#CFFAF2 60%,var(--sky));
+    box-shadow:0 0 16px var(--sky),0 2px 7px rgba(0,0,0,.55)}
+  .axis .ends{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);letter-spacing:.05em}
+
+  .controls{display:flex;gap:18px;align-items:center;margin-top:36px}
   .cbtn{width:60px;height:60px;border-radius:50%;border:1px solid var(--line);background:var(--card);
     color:var(--ink);display:grid;place-items:center;cursor:pointer;transition:.16s}
   .cbtn:active{transform:scale(.93)}
@@ -234,6 +243,11 @@
       </div>
     </div>
 
+    <div class="axis">
+      <div class="track"><div class="fill" id="axisFill"></div><div class="ball" id="axisBall"></div></div>
+      <div class="ends"><span>Expire ◂</span><span>▸ Inspire</span></div>
+    </div>
+
     <div class="controls">
       <button class="cbtn" id="soundToggle" aria-label="Son">
         <svg id="soundIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M19 5a9 9 0 0 1 0 14M16 8a5 5 0 0 1 0 8"/></svg>
@@ -266,10 +280,11 @@
 <script>
 "use strict";
 const $=s=>document.querySelector(s);
-const LS='cc_settings_v1', HK='cc_history_v1';
+const LS='cc_settings_v2', HK='cc_history_v1';
 
 /* ---------- rythmes ---------- */
 const RHYTHMS=[
+  {id:'lent',      nm:'Lent',      ds:'7 s / 7 s · respiration ample', bpm:'~4/min', ph:[['in',7],['out',7]]},
   {id:'coherence', nm:'Cohérence', ds:'5 s / 5 s · la référence', bpm:'6/min', ph:[['in',5],['out',5]]},
   {id:'apaisant',  nm:'Apaisant',  ds:'4 s / 6 s · expire long', bpm:'6/min', ph:[['in',4],['out',6]]},
   {id:'profond',   nm:'Profond',   ds:'6 s / 6 s · ralenti',     bpm:'5/min', ph:[['in',6],['out',6]]},
@@ -280,8 +295,8 @@ const RHYTHMS=[
 const PH_LABEL={in:'Inspire', out:'Expire', hold:'Retiens', hold2:'Retiens'};
 
 /* ---------- état / réglages ---------- */
-const defaults={rhythm:'coherence', minutes:5, sound:false, vibTransition:false, vibGuide:false, vibEnd:true, wake:true, showWord:true,
-  cIn:4,cH1:2,cOut:4,cH2:2};
+const defaults={rhythm:'lent', minutes:5, sound:false, vibTransition:false, vibGuide:false, vibEnd:true, wake:true, showWord:true,
+  cIn:7,cH1:0,cOut:7,cH2:0};
 let S=Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS)||'{}'));
 const save=()=>localStorage.setItem(LS,JSON.stringify(S));
 
@@ -301,7 +316,12 @@ $('#custom').classList.toggle('show', S.rhythm==='custom');
 
 ['sound','vibTransition','vibGuide','vibEnd','wake','showWord'].forEach(k=>{
   const sw=document.querySelector(`.sw[data-k="${k}"]`); sw.classList.toggle('on',!!S[k]);
-  sw.onclick=()=>{ S[k]=!S[k]; sw.classList.toggle('on',S[k]); save(); };
+  sw.onclick=()=>{ S[k]=!S[k]; sw.classList.toggle('on',S[k]); save();
+    if(S[k] && k.startsWith('vib')){
+      if(navigator.vibrate){ try{navigator.vibrate(140)}catch(e){} }
+      else { sw.classList.remove('on'); S[k]=false; save(); alert("Ce navigateur ne gère pas la vibration (c'est le cas sur iPhone/Safari). Sur Android, utilise Chrome et vérifie que la vibration système est activée."); }
+    }
+  };
 });
 
 const dur=$('#dur'); dur.value=S.minutes; $('#durV').textContent=S.minutes;
@@ -364,14 +384,16 @@ function tone(type){
 }
 function vibrate(p){ if(navigator.vibrate) try{navigator.vibrate(p)}catch(e){} }
 const lerp=(a,b,t)=>a+(b-a)*t;
-// pattern de pulsations qui accélèrent à l'inspire et ralentissent à l'expire
+// pattern de pulsations : montée (pulses longues, rapprochées) à l'inspire,
+// descente (pulses courtes, espacées) à l'expire. Durées >50ms pour être ressenties.
 function guidePattern(type, fromProg, fullMs){
   if(type!=='in' && type!=='out') return null;      // pas de vibration sur les pauses
-  const pulse=22, out=[]; let t=0; const total=fullMs*(1-fromProg);
+  const out=[]; let t=0; const total=fullMs*(1-fromProg);
   while(t<total){
     const p=fromProg + t/fullMs;
-    const gap = type==='in' ? lerp(260,90,p) : lerp(90,260,p);
-    out.push(pulse, Math.round(gap)); t+=pulse+gap;
+    const pulse = type==='in' ? lerp(60,170,p) : lerp(170,60,p);
+    const gap   = type==='in' ? lerp(150,70,p) : lerp(70,150,p);
+    out.push(Math.round(pulse), Math.round(gap)); t+=pulse+gap;
   }
   return out;
 }
@@ -390,7 +412,7 @@ document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==
 /* ---------- moteur de séance ---------- */
 const ARC=295.3;
 const orb=$('#orb'), glow=$('#glow'), phaseEl=$('#phase'), countEl=$('#count'),
-      remainEl=$('#remain'), progArc=$('#progArc');
+      remainEl=$('#remain'), progArc=$('#progArc'), axisFill=$('#axisFill'), axisBall=$('#axisBall');
 let running=false, paused=false, raf=0;
 let phases=[], totalMs=0, startTs=0, pausedMs=0, pauseStart=0;
 let curPhase=-1, breaths=0, doneMin=0;
@@ -444,7 +466,7 @@ function loop(){
     if(S.showWord) phaseEl.textContent=PH_LABEL[p.t];
     else phaseEl.textContent='';
     tone(p.t);
-    if(S.vibTransition) vibrate(p.t==='in'?[30]:p.t==='out'?[18]:[12]);
+    if(S.vibTransition) vibrate(p.t==='in'?[110]:p.t==='out'?[70]:[45]);
     startGuide(p.t, 0, p.d);
   }
   // compte à rebours de phase
@@ -454,7 +476,10 @@ function loop(){
   const sc=scaleFor(p.t,prog);
   orb.style.transform=`scale(${sc})`;
   glow.style.transform=`scale(${sc})`;
-  glow.style.opacity = 0.45+0.45*((sc-.55)/.45);
+  const level=(sc-.55)/.45;                       // 0 = poumons vides, 1 = pleins
+  glow.style.opacity = 0.45+0.45*level;
+  axisBall.style.left=(level*100)+'%';
+  axisFill.style.width=(level*100)+'%';
 
   raf=requestAnimationFrame(loop);
 }
