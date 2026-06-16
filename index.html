@@ -199,11 +199,11 @@
       <div class="sect-h"><span class="t">Options</span></div>
       <div class="toggles" id="toggles">
         <div class="tg"><div><div class="lab">Sons doux</div><div class="sub">Note grave / aiguë à chaque transition</div></div><div class="sw" data-k="sound"></div></div>
-        <div class="tg"><div><div class="lab">Guidage sonore</div><div class="sub">Son continu qui monte à l'inspire, redescend à l'expire</div></div><div class="sw" data-k="soundGuide"></div></div>
+        <div class="tg"><div><div class="lab">Guidage sonore</div><div class="sub">Souffle naturel qui enfle à l'inspire, se retire à l'expire</div></div><div class="sw" data-k="soundGuide"></div></div>
         <div class="voices" id="voices">
-          <button data-v="bol">Bol tibétain</button>
-          <button data-v="onde">Onde chaude</button>
-          <button data-v="souffle">Souffle clair</button>
+          <button data-v="ocean">Océan</button>
+          <button data-v="vent">Vent</button>
+          <button data-v="ruisseau">Ruisseau</button>
         </div>
         <div class="tg"><div><div class="lab">Vibration aux transitions</div><div class="sub">Pulsation courte à chaque phase</div></div><div class="sw" data-k="vibTransition"></div></div>
         <div class="tg"><div><div class="lab">Guidage vibrant</div><div class="sub">Pulsations rythmées pendant inspire / expire</div></div><div class="sw" data-k="vibGuide"></div></div>
@@ -307,7 +307,7 @@ const RHYTHMS=[
 const PH_LABEL={in:'Inspire', out:'Expire', hold:'Retiens', hold2:'Retiens'};
 
 /* ---------- état / réglages ---------- */
-const defaults={rhythm:'lent', minutes:5, sound:false, soundGuide:false, soundVoice:'bol', vibTransition:false, vibGuide:false, vibEnd:true, wake:true, showWord:true,
+const defaults={rhythm:'lent', minutes:5, sound:false, soundGuide:false, soundVoice:'ocean', vibTransition:false, vibGuide:false, vibEnd:true, wake:true, showWord:true,
   cIn:7,cH1:0,cOut:7,cH2:0};
 let S=Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS)||'{}'));
 const save=()=>localStorage.setItem(LS,JSON.stringify(S));
@@ -426,69 +426,71 @@ function startGuide(type, fromProg, fullMs){
   try{ navigator.vibrate(pat===null?0:pat); }catch(e){}
 }
 
-/* ---------- guidage sonore : nappe continue ondulante ---------- */
-// hauteur qui monte doucement à l'inspire et redescend à l'expire (amplitude faible, lissée)
+/* ---------- guidage sonore : textures naturelles (souffle filtré) ---------- */
+// pas de hauteur : une nappe de bruit qui s'ouvre/enfle à l'inspire et se retire à l'expire
 const VOICES={
-  bol:     {base:[240,324], partials:[[1,1],[2,0.5],[2.76,0.13],[4,0.05]], lp:1500, gmin:0.016, gmax:0.046, rev:[2.6,0.34]},
-  onde:    {base:[192,256], partials:[[1,1],[2,0.40],[3,0.13]],            lp:950,  gmin:0.018, gmax:0.048, rev:[3.0,0.40]},
-  souffle: {base:[324,432], partials:[[1,1],[2,0.28],[4,0.07]],            lp:2300, gmin:0.012, gmax:0.038, rev:[2.2,0.30]},
+  ocean:    {type:'lowpass',  f:[230,760],  Q:[0.4,0.8], g:[0.020,0.115], rev:[3.0,0.34]},
+  vent:     {type:'bandpass', f:[380,1050], Q:[0.5,0.9], g:[0.016,0.090], rev:[2.6,0.30]},
+  ruisseau: {type:'highpass', f:[650,1500], Q:[0.3,0.6], g:[0.018,0.085], rev:[1.8,0.24]},
 };
-function curVoice(){ return VOICES[S.soundVoice]||VOICES.bol; }
+function curVoice(){ return VOICES[S.soundVoice]||VOICES.ocean; }
 const smooth=x=>x*x*(3-2*x);
-let gMaster=null, gSwell=null, gFilt=null, gRev=null, gOscs=[];
+let gMaster=null, gSwell=null, gFilt=null, gSrc=null, gNoise=null;
 function ensureCtx(){ try{ actx=actx||new(window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended')actx.resume(); }catch(e){} return actx; }
+function makeNoise(){                       // bruit rose (plus doux/naturel que le blanc), stéréo
+  if(gNoise) return gNoise;
+  const len=Math.floor(actx.sampleRate*4), buf=actx.createBuffer(2,len,actx.sampleRate);
+  for(let ch=0;ch<2;ch++){ const d=buf.getChannelData(ch);
+    let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;
+    for(let i=0;i<len;i++){ const w=Math.random()*2-1;
+      b0=0.99886*b0+w*0.0555179; b1=0.99332*b1+w*0.0750759; b2=0.96900*b2+w*0.1538520;
+      b3=0.86650*b3+w*0.3104856; b4=0.55000*b4+w*0.5329522; b5=-0.7616*b5-w*0.0168980;
+      d[i]=(b0+b1+b2+b3+b4+b5+b6+w*0.5362)*0.09; b6=w*0.115926; }
+  }
+  gNoise=buf; return buf;
+}
 function makeReverb(sec){
   const len=Math.floor(actx.sampleRate*sec), buf=actx.createBuffer(2,len,actx.sampleRate);
   for(let ch=0;ch<2;ch++){ const d=buf.getChannelData(ch);
-    for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,3.0); }
+    for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,2.8); }
   const c=actx.createConvolver(); c.buffer=buf; return c;
+}
+function buildChain(v){
+  const master=actx.createGain(); master.gain.value=0.9; master.connect(actx.destination);
+  const filt=actx.createBiquadFilter(); filt.type=v.type; filt.frequency.value=v.f[0]; filt.Q.value=v.Q[0];
+  const swell=actx.createGain(); swell.gain.value=v.g[0];
+  filt.connect(swell).connect(master);
+  const rev=makeReverb(v.rev[0]), rv=actx.createGain(); rv.gain.value=v.rev[1];
+  swell.connect(rev).connect(rv).connect(master);
+  const src=actx.createBufferSource(); src.buffer=makeNoise(); src.loop=true; src.connect(filt); src.start();
+  return {master,filt,swell,src};
 }
 function guideToneStart(){
   if(gMaster) return; if(!ensureCtx()) return;
-  const v=curVoice();
-  gMaster=actx.createGain(); gMaster.gain.value=0.9; gMaster.connect(actx.destination);
-  gFilt=actx.createBiquadFilter(); gFilt.type='lowpass'; gFilt.frequency.value=v.lp; gFilt.Q.value=0.2;
-  gSwell=actx.createGain(); gSwell.gain.value=0.0001;
-  gFilt.connect(gSwell).connect(gMaster);
-  gRev=makeReverb(v.rev[0]); const rv=actx.createGain(); rv.gain.value=v.rev[1];
-  gSwell.connect(gRev).connect(rv).connect(gMaster);
-  gOscs=v.partials.map(([ratio,g])=>{
-    const o=actx.createOscillator(), pg=actx.createGain();
-    o.type='sine'; o.frequency.value=v.base[0]*ratio; pg.gain.value=g;
-    o.connect(pg).connect(gFilt); o.start(); return {o,ratio};
-  });
+  const c=buildChain(curVoice()); gMaster=c.master; gFilt=c.filt; gSwell=c.swell; gSrc=c.src;
 }
-function guideToneUpdate(level){             // level 0 (vide) -> 1 (plein)
+function guideToneUpdate(level){            // level 0 (vide) -> 1 (plein) : la vague monte
   if(!gMaster||!actx||paused) return;
   const v=curVoice(), t=actx.currentTime, e=smooth(Math.max(0,Math.min(1,level)));
-  const base=lerp(v.base[0], v.base[1], e);
-  gOscs.forEach(({o,ratio})=> o.frequency.setTargetAtTime(base*ratio, t, 0.22));
-  gSwell.gain.setTargetAtTime(lerp(v.gmin, v.gmax, e), t, 0.2);
-  gFilt.frequency.setTargetAtTime(v.lp + e*350, t, 0.25);
+  gFilt.frequency.setTargetAtTime(lerp(v.f[0],v.f[1],e), t, 0.25);
+  gFilt.Q.setTargetAtTime(lerp(v.Q[0],v.Q[1],e), t, 0.25);
+  gSwell.gain.setTargetAtTime(lerp(v.g[0],v.g[1],e), t, 0.22);
 }
 function guideToneStop(){
   if(!gMaster) return;
-  try{ const t=actx.currentTime; gSwell.gain.setTargetAtTime(0.0001,t,0.25);
-       gOscs.forEach(({o})=>{try{o.stop(t+0.6)}catch(e){}}); }catch(e){}
+  try{ const t=actx.currentTime; gSwell.gain.setTargetAtTime(0.0001,t,0.3); gSrc.stop(t+0.6); }catch(e){}
   const m=gMaster; setTimeout(()=>{try{m.disconnect()}catch(e){}},1000);
-  gMaster=null; gSwell=null; gFilt=null; gRev=null; gOscs=[];
+  gMaster=null; gFilt=null; gSwell=null; gSrc=null;
 }
-function previewGuide(){                      // aperçu : une vague lente qui monte puis redescend
+function previewGuide(){                    // aperçu : une vague lente qui monte puis se retire
   if(!ensureCtx()) return;
-  const v=curVoice(), t=actx.currentTime;
-  const master=actx.createGain(); master.gain.value=0.9; master.connect(actx.destination);
-  const fl=actx.createBiquadFilter(); fl.type='lowpass'; fl.frequency.value=v.lp; fl.Q.value=0.2;
-  const sw=actx.createGain(); sw.gain.value=0.0001; fl.connect(sw).connect(master);
-  const rev=makeReverb(v.rev[0]), rv=actx.createGain(); rv.gain.value=v.rev[1]; sw.connect(rev).connect(rv).connect(master);
-  const oscs=v.partials.map(([ratio,g])=>{ const o=actx.createOscillator(), pg=actx.createGain();
-    o.type='sine'; pg.gain.value=g; o.connect(pg).connect(fl); return {o,ratio}; });
-  const hi=v.base[1], lo=v.base[0];
-  oscs.forEach(({o,ratio})=>{ o.frequency.setValueAtTime(lo*ratio,t);
-    o.frequency.linearRampToValueAtTime(hi*ratio,t+1.8);
-    o.frequency.linearRampToValueAtTime(lo*ratio,t+3.6); o.start(t); o.stop(t+3.8); });
-  sw.gain.linearRampToValueAtTime(v.gmax,t+1.8);
-  sw.gain.linearRampToValueAtTime(0.0001,t+3.6);
-  setTimeout(()=>{try{master.disconnect()}catch(e){}},4200);
+  const v=curVoice(), t=actx.currentTime, c=buildChain(v);
+  c.filt.frequency.setValueAtTime(v.f[0],t); c.filt.frequency.linearRampToValueAtTime(v.f[1],t+2.0);
+  c.filt.frequency.linearRampToValueAtTime(v.f[0],t+4.0);
+  c.swell.gain.setValueAtTime(v.g[0],t); c.swell.gain.linearRampToValueAtTime(v.g[1],t+2.0);
+  c.swell.gain.linearRampToValueAtTime(0.0001,t+4.0);
+  try{ c.src.stop(t+4.2); }catch(e){}
+  setTimeout(()=>{try{c.master.disconnect()}catch(e){}},4600);
 }
 
 /* ---------- wake lock ---------- */
